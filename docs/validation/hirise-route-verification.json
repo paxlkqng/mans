@@ -1,0 +1,371 @@
+{
+  "cellSizeM": 1.0096633268711,
+  "costTolerance": "1e-7 + 1e-9 * abs(Dijkstra cost)",
+  "crs": "PROJCS[\"EQUIRECTANGULAR MARS\",GEOGCS[\"GCS_MARS\",DATUM[\"D_MARS\",SPHEROID[\"MARS_localRadius\",3394839.8133163,0]],PRIMEM[\"Reference_Meridian\",0],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]]],PROJECTION[\"Equirectangular\"],PARAMETER[\"standard_parallel_1\",15],PARAMETER[\"central_meridian\",77.44],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH]]",
+  "dataset": "HiRISE Jezero 3x3 measured terrain",
+  "dimensions": [
+    1534,
+    1534
+  ],
+  "limitations": "Bounded numerical checks of a discrete measured-elevation model, not exhaustive proof or astronaut safety certification. No hazards beyond represented valid-data and slope constraints were validated. No maximum-slope ordering is assumed between policies.",
+  "maximumSettledNodesPerSearch": 2353156,
+  "pass": true,
+  "policies": {
+    "hardSlopeLimitDeg": 23.0,
+    "lowerRisk": {
+      "elevationWeight": 1.0,
+      "slopeWeight": 2.5
+    },
+    "shortest": {
+      "elevationWeight": 0.0,
+      "slopeWeight": 0.0
+    }
+  },
+  "reference": "Independent test-only Dijkstra and facet/constraint/statistics implementation; production edge helpers not called.",
+  "routes": [
+    {
+      "destination": {
+        "column": 525,
+        "eastingM": -198.39884373027223,
+        "northingM": 1094557.3338894127,
+        "row": 925,
+        "tile": "tile-1-1"
+      },
+      "lowerRisk": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 40.53534375874112,
+        "dijkstraSettledNodes": 4002,
+        "elevationGainM": 0.2894287109375,
+        "elevationLossM": 0.6844482421875,
+        "horizontalDistanceM": 35.69698925729623,
+        "maximumSlopeDeg": 4.584749643515104,
+        "objectiveCost": 40.53534375874112,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          0.0,
+          7.105427357601002e-15,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "routeSamples": 26,
+        "seconds": 0.003974291,
+        "surfaceDistanceM": 35.71855128716702,
+        "tolerance": 1.4053534375874113e-7
+      },
+      "lowerRiskObjectiveNotGreaterThanShortestPath": true,
+      "pass": true,
+      "routeId": "column-seam",
+      "shortest": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 35.71855128716702,
+        "dijkstraSettledNodes": 3536,
+        "elevationGainM": 0.2894287109375,
+        "elevationLossM": 0.6844482421875,
+        "horizontalDistanceM": 35.69698925729623,
+        "maximumSlopeDeg": 4.584749643515104,
+        "objectiveCost": 35.71855128716702,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          0.0,
+          7.105427357601002e-15,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "routeSamples": 26,
+        "seconds": 0.0067955,
+        "surfaceDistanceM": 35.71855128716702,
+        "tolerance": 1.3571855128716702e-7
+      },
+      "shortestDistanceNotGreater": true,
+      "start": {
+        "column": 500,
+        "eastingM": -223.6404269020498,
+        "northingM": 1094582.5754725845,
+        "row": 900,
+        "tile": "tile-0-1"
+      }
+    },
+    {
+      "destination": {
+        "column": 925,
+        "eastingM": 205.46648701816764,
+        "northingM": 1094961.1992201612,
+        "row": 525,
+        "tile": "tile-1-1"
+      },
+      "lowerRisk": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 38.878923385830404,
+        "dijkstraSettledNodes": 3765,
+        "elevationGainM": 0.1810302734375,
+        "elevationLossM": 0.5821533203125,
+        "horizontalDistanceM": 35.69698925729623,
+        "maximumSlopeDeg": 4.643148310022409,
+        "objectiveCost": 38.878923385830404,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          7.105427357601002e-15,
+          7.105427357601002e-15,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "routeSamples": 26,
+        "seconds": 0.004209542,
+        "surfaceDistanceM": 35.71284534041236,
+        "tolerance": 1.388789233858304e-7
+      },
+      "lowerRiskObjectiveNotGreaterThanShortestPath": true,
+      "pass": true,
+      "routeId": "row-seam",
+      "shortest": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 35.71284534041236,
+        "dijkstraSettledNodes": 3535,
+        "elevationGainM": 0.1810302734375,
+        "elevationLossM": 0.5821533203125,
+        "horizontalDistanceM": 35.69698925729623,
+        "maximumSlopeDeg": 4.643148310022409,
+        "objectiveCost": 35.71284534041236,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          7.105427357601002e-15,
+          7.105427357601002e-15,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "routeSamples": 26,
+        "seconds": 0.003717583,
+        "surfaceDistanceM": 35.71284534041236,
+        "tolerance": 1.3571284534041236e-7
+      },
+      "shortestDistanceNotGreater": true,
+      "start": {
+        "column": 900,
+        "eastingM": 180.22490384639025,
+        "northingM": 1094986.440803333,
+        "row": 500,
+        "tile": "tile-1-0"
+      }
+    },
+    {
+      "destination": {
+        "column": 1040,
+        "eastingM": 321.5777696083443,
+        "northingM": 1094441.2226068226,
+        "row": 1040,
+        "tile": "tile-2-2"
+      },
+      "lowerRisk": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 52.534638699107006,
+        "dijkstraSettledNodes": 7086,
+        "elevationGainM": 0.2060546875,
+        "elevationLossM": 0.6015625,
+        "horizontalDistanceM": 49.97578496021473,
+        "maximumSlopeDeg": 3.5906090107439828,
+        "objectiveCost": 52.534638699107006,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          1.4210854715202004e-14,
+          7.105427357601002e-15,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "routeSamples": 36,
+        "seconds": 0.006023625,
+        "surfaceDistanceM": 49.98675033179801,
+        "tolerance": 1.52534638699107e-7
+      },
+      "lowerRiskObjectiveNotGreaterThanShortestPath": true,
+      "pass": true,
+      "routeId": "four-tile-junction",
+      "shortest": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 49.98675033179801,
+        "dijkstraSettledNodes": 6935,
+        "elevationGainM": 0.2060546875,
+        "elevationLossM": 0.6015625,
+        "horizontalDistanceM": 49.97578496021473,
+        "maximumSlopeDeg": 3.5906090107439828,
+        "objectiveCost": 49.98675033179801,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          1.4210854715202004e-14,
+          7.105427357601002e-15,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "routeSamples": 36,
+        "seconds": 0.005853708,
+        "surfaceDistanceM": 49.98675033179801,
+        "tolerance": 1.49986750331798e-7
+      },
+      "shortestDistanceNotGreater": true,
+      "start": {
+        "column": 1005,
+        "eastingM": 286.23955316785566,
+        "northingM": 1094476.5608232631,
+        "row": 1005,
+        "tile": "tile-1-1"
+      }
+    },
+    {
+      "destination": {
+        "column": 1271,
+        "eastingM": 554.8099981155682,
+        "northingM": 1095241.8856250313,
+        "row": 247,
+        "tile": "tile-2-0"
+      },
+      "lowerRisk": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 1564.358515438114,
+        "dijkstraSettledNodes": 1888909,
+        "elevationGainM": 11.337890625,
+        "elevationLossM": 14.8916015625,
+        "horizontalDistanceM": 1493.4953754017204,
+        "maximumSlopeDeg": 6.0182643951832056,
+        "objectiveCost": 1564.358515438114,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -8.881784197001252e-16
+        ],
+        "routeSamples": 1078,
+        "seconds": 1.450121208,
+        "surfaceDistanceM": 1493.883471930696,
+        "tolerance": 1.6643585154381139e-6
+      },
+      "lowerRiskObjectiveNotGreaterThanShortestPath": true,
+      "pass": true,
+      "routeId": "regional-crossing",
+      "shortest": {
+        "allEdgesValid": true,
+        "astarMinusDijkstraCost": 0.0,
+        "dijkstraOptimalCost": 1464.7147897629998,
+        "dijkstraSettledNodes": 2126424,
+        "elevationGainM": 16.16064453125,
+        "elevationLossM": 19.71435546875,
+        "horizontalDistanceM": 1463.9230212292027,
+        "maximumSlopeDeg": 8.25953818195503,
+        "objectiveCost": 1464.7147897629998,
+        "pass": true,
+        "productionMinusReferenceStatistics": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "routeSamples": 1028,
+        "seconds": 1.4234742919999999,
+        "surfaceDistanceM": 1464.7147897629998,
+        "tolerance": 1.5647147897629999e-6
+      },
+      "shortestDistanceNotGreater": true,
+      "start": {
+        "column": 244,
+        "eastingM": -482.1142385810514,
+        "northingM": 1094211.019368296,
+        "row": 1268,
+        "tile": "tile-0-2"
+      }
+    }
+  ],
+  "selection": "Four fixed valid endpoint pairs: three tile seams/junctions and one regional crossing. Entire 1534x1534 graph used without spatial pruning.",
+  "sourceAssets": [
+    {
+      "file": "data/local/hirise-tiles/manifest.json",
+      "sha256": "9ac5e22a824e53cb224e267296ea0a4ab291bdf4ace4c3599a0abd9dc1e12122"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-0-0/terrain.json",
+      "sha256": "7f7b69a6bf6fae4318ef2dbaa688a2bad217efabad76c3c90d700c38239dc9d5"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-0-0/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-1-0/terrain.json",
+      "sha256": "fd986092641a6f06ed1337585aa727ff345b282b1f8ce5c33ab1f82b1e1cc19b"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-1-0/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-2-0/terrain.json",
+      "sha256": "52b3808a8254d81a498fd19c9cc9ef2691f63998f5922d8abf3557746aaa321d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-2-0/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-0-1/terrain.json",
+      "sha256": "1c522c92a9ba1a30830dc5a9abc94eb1545543d659be00c484d7580187ab3b41"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-0-1/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-1-1/terrain.json",
+      "sha256": "d6973619e42452db8b43963375f4cb1b033259286251bedfa545e91abb7fb57d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-1-1/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-2-1/terrain.json",
+      "sha256": "c76a0c4acc6fc9e10f4554900796fd974ba00f36c614bc202d38583375572c9e"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-2-1/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-0-2/terrain.json",
+      "sha256": "8b5e9c534553538619ec31a4806c51b58999d46b3dad6df8d50418b506d4dd0c"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-0-2/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-1-2/terrain.json",
+      "sha256": "f7dc8a98ebe22deb69c7094b67e549a4d438c79d0afc836f35909ffa1db85e51"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-1-2/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-2-2/terrain.json",
+      "sha256": "3cabd7d981c5b1a1bda557f511a2f6b4646a4a04e023a25f1c8baeefcb9200ae"
+    },
+    {
+      "file": "data/local/hirise-tiles/tile-2-2/valid.u8",
+      "sha256": "f317dd9d6ba01c465d82e4c4d55d01d270dda69db4a01a64c587a5593ac6084d"
+    }
+  ],
+  "statisticsTolerance": 1e-7
+}

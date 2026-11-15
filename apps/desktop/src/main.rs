@@ -1,5 +1,7 @@
 mod astronaut;
 mod route_renderer;
+#[cfg(test)]
+mod route_verification;
 mod terrain_navigation;
 mod terrain_picking;
 mod terrain_renderer;
