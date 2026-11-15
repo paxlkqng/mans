@@ -92,3 +92,8 @@ The route slope is derived from the terrain grid, not an independent sensor obse
 - `src/App.tsx` — playback, sensor simulation and mission-control interface.
 - `data/prepare_terrain.py` — observed DTM crop and provenance metadata.
 - `tools/nasa-data/fetch_mola_jezero.py` — reproducible NASA PDS MOLA Jezero extractor using byte-range requests.
+
+
+## AI Assistance Disclosure
+
+OpenAI ChatGPT and Codex were used to assist with project planning, technical consultation, software implementation, debugging, code improvement and optimization, data analysis, and technical writing and translation. The team directed the development process, made design decisions, and reviewed and tested the implementation.
