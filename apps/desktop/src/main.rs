@@ -1,3 +1,4 @@
+mod astronaut;
 mod route_renderer;
 mod terrain_navigation;
 mod terrain_picking;
@@ -68,6 +69,9 @@ impl Default for SavedState {
 }
 
 struct MissionApp {
+    navigation_mode: bool,
+    astronaut: Option<astronaut::Astronaut>,
+    navigation_route: usize,
     route_worker: Option<terrain_navigation::RouteWorker>,
     route_3d: Option<terrain_navigation::RouteComparison>,
     route_visible: [bool; 2],
@@ -255,6 +259,9 @@ impl MissionApp {
             state,
             route: Vec::new(),
             inspected: None,
+            navigation_mode: false,
+            astronaut: None,
+            navigation_route: 1,
             route_worker: terrain_navigation::RouteWorker::new(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../../data/local/hirise-tiles/manifest.json"),
@@ -288,6 +295,8 @@ impl MissionApp {
     }
 
     fn switch_dataset(&mut self, dataset: usize) {
+        self.navigation_mode = false;
+        self.astronaut = None;
         self.invalidate_3d_route();
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/local/hirise-jezero/terrain.json");
@@ -555,6 +564,13 @@ impl MissionApp {
             self.route_busy = false;
             match result {
                 Ok(route) => {
+                    if self.navigation_mode {
+                        if let Some(a) = &mut self.astronaut {
+                            a.waypoint = 0;
+                        }
+                    } else {
+                        self.astronaut = None;
+                    }
                     tracing::info!(
                         shortest = route.shortest.length,
                         lower_risk = route.lower_risk.length,
@@ -585,6 +601,214 @@ impl MissionApp {
                 }
             }
         }
+    }
+
+    fn enter_navigation(&mut self) {
+        let Some(routes) = &self.route_3d else {
+            self.message = "Calculate a HiRISE route before entering Astronaut Navigation.".into();
+            return;
+        };
+        let route = if self.navigation_route == 0 {
+            &routes.shortest
+        } else {
+            &routes.lower_risk
+        };
+        let p = self
+            .astronaut
+            .as_ref()
+            .map(|a| a.ground)
+            .unwrap_or(route.start.world);
+        let hit = self
+            .render_state
+            .renderer
+            .read()
+            .callback_resources
+            .get::<terrain_renderer::TerrainRenderer>()
+            .and_then(|r| r.ground(p.x, p.z));
+        let Some(hit) = hit else {
+            self.message="Cannot enter navigation: measured terrain at the simulation position is not loaded. Load that region in planning first.".into();
+            return;
+        };
+        if self.astronaut.is_none() {
+            self.astronaut = Some(astronaut::Astronaut::new(hit.world, route));
+        }
+        if let Some(a) = &mut self.astronaut {
+            a.ground = hit.world;
+            a.focus_viewport = true;
+        }
+        self.navigation_mode = true;
+    }
+    fn recalculate_from_astronaut(&mut self) {
+        let Some(a) = &self.astronaut else {
+            return;
+        };
+        let hit = self
+            .render_state
+            .renderer
+            .read()
+            .callback_resources
+            .get::<terrain_renderer::TerrainRenderer>()
+            .and_then(|r| r.ground(a.ground.x, a.ground.z));
+        if let Some(hit) = hit {
+            self.start_3d = Some(hit);
+            self.calculate_active_route();
+        } else if let Some(a) = &mut self.astronaut {
+            a.error = Some(
+                "Cannot recalculate: measured terrain at the simulated position is unavailable."
+                    .into(),
+            );
+        }
+    }
+    fn draw_astronaut(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.strong("Simulated astronaut · no measured localization");
+            if ui
+                .add_enabled(
+                    !self.route_busy && self.goal_3d.is_some(),
+                    egui::Button::new("Recalculate from here"),
+                )
+                .clicked()
+            {
+                self.recalculate_from_astronaut();
+            }
+            if ui.button("Return to planning (Esc)").clicked() {
+                self.navigation_mode = false;
+            }
+        });
+        ui.small("Click the terrain viewport to enable WASD · Arrow keys or left drag: look · 1.2 m/s simulated speed · 35° simulated walking limit");
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let Some(a) = &mut self.astronaut else {
+            ui.label("Simulation not initialized. Return to Mission Planning.");
+            return;
+        };
+        if a.focus_viewport || response.clicked() {
+            response.request_focus();
+            a.focus_viewport = false;
+        }
+        let focused = response.has_focus() && ui.input(|i| i.focused);
+        if focused {
+            let (movement, turn, pitch, dt, escape) = ui.input(|i| {
+                let movement = glam::Vec2::new(
+                    i.key_down(egui::Key::D) as i32 as f32 - i.key_down(egui::Key::A) as i32 as f32,
+                    i.key_down(egui::Key::W) as i32 as f32 - i.key_down(egui::Key::S) as i32 as f32,
+                );
+                (
+                    movement,
+                    i.key_down(egui::Key::ArrowRight) as i32 as f32
+                        - i.key_down(egui::Key::ArrowLeft) as i32 as f32,
+                    i.key_down(egui::Key::ArrowUp) as i32 as f32
+                        - i.key_down(egui::Key::ArrowDown) as i32 as f32,
+                    i.stable_dt.min(0.1),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if escape {
+                self.navigation_mode = false;
+            }
+            a.look(turn * dt, pitch * dt);
+            if response.dragged_by(egui::PointerButton::Primary) {
+                let delta = ui.input(|i| i.pointer.delta());
+                a.look(delta.x * 0.004, -delta.y * 0.004);
+            }
+            let guard = self.render_state.renderer.read();
+            let renderer = guard
+                .callback_resources
+                .get::<terrain_renderer::TerrainRenderer>();
+            a.move_ground(movement, dt, |x, z| {
+                renderer.and_then(|r| r.ground(x, z)).map(|hit| hit.world.y)
+            });
+        }
+        let m = self.tile_manifest.as_ref().unwrap();
+        let camera = terrain_renderer::Camera::ground_view(a.eye(), a.heading, a.pitch, m.extent());
+        let painter = ui.painter_at(rect);
+        painter.add(terrain_renderer::callback(
+            rect,
+            camera,
+            self.display_mode,
+            true,
+            self.boundaries,
+            // Ground movement needs every adjacent tile, even if the planning
+            // cache was reduced to one. Still bounded to nine resident tiles.
+            9,
+        ));
+        let mut lines = vec![
+            "SIMULATED POSITION · HiRISE terrain".to_string(),
+            format!(
+                "E {:.1} m  N {:.1} m  · Ground {:.1} m",
+                m.origin[0] + a.ground.x as f64,
+                m.origin[1] - a.ground.z as f64,
+                m.origin[2] + a.ground.y as f64
+            ),
+            format!(
+                "Grid heading {:05.1}° · Eye height 1.7 m",
+                a.heading.to_degrees()
+            ),
+        ];
+        if let Some(routes) = &self.route_3d {
+            let route = if self.navigation_route == 0 {
+                &routes.shortest
+            } else {
+                &routes.lower_risk
+            };
+            let guide = a.guidance(route);
+            lines.push(format!(
+                "{} · Next waypoint {}: {:.1} m planar · Bearing {:05.1}°",
+                if self.navigation_route == 0 {
+                    "Shortest"
+                } else {
+                    "Lower-risk"
+                },
+                a.waypoint + 1,
+                guide.distance,
+                guide.bearing
+            ));
+            if guide.arrived {
+                lines.push("Destination reached (simulation).".into());
+            }
+            if guide.deviation > astronaut::DEVIATION_LIMIT {
+                lines.push(format!(
+                    "OFF ROUTE {:.1} m — return to the route or use Recalculate from here.",
+                    guide.deviation
+                ));
+            }
+        } else {
+            lines.push(
+                if self.route_busy {
+                    "Recalculating route from simulated position…"
+                } else {
+                    "No active route. Return to planning or recalculate."
+                }
+                .into(),
+            );
+        }
+        if !focused {
+            lines.push("Click terrain to enable movement.".into());
+        }
+        if let Some(error) = &a.error {
+            lines.push(error.clone());
+        }
+        let area = Rect::from_min_size(
+            rect.min + Vec2::splat(12.0),
+            Vec2::new(
+                (rect.width() - 24.0).min(760.0),
+                lines.len() as f32 * 21.0 + 16.0,
+            ),
+        );
+        painter.rect_filled(area, 3.0, Color32::from_black_alpha(210));
+        for (i, line) in lines.iter().enumerate() {
+            painter.text(
+                area.min + Vec2::new(8.0, 8.0 + i as f32 * 21.0),
+                egui::Align2::LEFT_TOP,
+                line,
+                egui::FontId::monospace(13.0),
+                if line.starts_with("OFF ROUTE") {
+                    Color32::YELLOW
+                } else {
+                    Color32::WHITE
+                },
+            );
+        }
+        ui.ctx().request_repaint();
     }
 
     fn draw_viewport(&mut self, ui: &mut egui::Ui) {
@@ -991,6 +1215,8 @@ impl eframe::App for MissionApp {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Reset mission state").clicked() {
+                        self.navigation_mode = false;
+                        self.astronaut = None;
                         self.invalidate_3d_route();
                         self.start_3d = None;
                         self.goal_3d = None;
@@ -1001,7 +1227,11 @@ impl eframe::App for MissionApp {
                 });
                 ui.menu_button("Mission", |ui| {
                     if ui.button("Calculate route").clicked() {
-                        self.calculate_active_route();
+                        if self.navigation_mode {
+                            self.recalculate_from_astronaut();
+                        } else {
+                            self.calculate_active_route();
+                        }
                         ui.close_menu();
                     }
                     if ui.button("Inspect terrain").clicked() {
@@ -1010,7 +1240,44 @@ impl eframe::App for MissionApp {
                     }
                 });
                 ui.separator();
-                ui.label(egui::RichText::new("MANS / MISSION PLANNING WORKSTATION").strong());
+                if ui
+                    .selectable_label(!self.navigation_mode, "Mission Planning")
+                    .clicked()
+                {
+                    self.navigation_mode = false;
+                }
+                if ui
+                    .add_enabled(
+                        self.navigation_mode
+                            || (self.route_3d.is_some()
+                                && self.dataset == 0
+                                && self.gpu_diagnostic),
+                        egui::Button::new("Astronaut Navigation").selected(self.navigation_mode),
+                    )
+                    .clicked()
+                {
+                    self.enter_navigation();
+                }
+                if !self.navigation_mode {
+                    let previous = self.navigation_route;
+                    egui::ComboBox::from_id_salt("navigation_route")
+                        .selected_text(if self.navigation_route == 0 {
+                            "Navigate shortest"
+                        } else {
+                            "Navigate lower-risk"
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.navigation_route, 0, "Navigate shortest");
+                            ui.selectable_value(
+                                &mut self.navigation_route,
+                                1,
+                                "Navigate lower-risk",
+                            );
+                        });
+                    if previous != self.navigation_route {
+                        self.astronaut = None;
+                    }
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let dataset = if self.load_warning.is_some() {
                         "MOLA regional fallback"
@@ -1045,7 +1312,8 @@ impl eframe::App for MissionApp {
                 });
             });
 
-        egui::SidePanel::left("explorer")
+        if !self.navigation_mode {
+            egui::SidePanel::left("explorer")
             .default_width(212.0)
             .resizable(true)
             .show(ctx, |ui| {
@@ -1195,7 +1463,7 @@ impl eframe::App for MissionApp {
                 });
             });
 
-        egui::SidePanel::right("inspector")
+            egui::SidePanel::right("inspector")
             .default_width(245.0)
             .resizable(true)
             .show(ctx, |ui| {
@@ -1286,8 +1554,12 @@ impl eframe::App for MissionApp {
                 }
                 });
             });
-
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
+            if self.navigation_mode {
+                self.draw_astronaut(ui);
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.heading("Terrain workspace");
                 ui.separator();

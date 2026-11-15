@@ -1,5 +1,33 @@
 use super::*;
 impl TerrainRenderer {
+    pub fn ground(&self, x: f32, z: f32) -> Option<crate::terrain_picking::TerrainHit> {
+        let m = &self.manager.as_ref()?.manifest;
+        let top = (m.max_elevation - m.origin[2]) as f32 + 1.0;
+        let ray = crate::terrain_picking::Ray {
+            origin: Vec3::new(x, top, z),
+            direction: -Vec3::Y,
+            length: (m.max_elevation - m.min_elevation) as f32 + 2.0,
+        };
+        for (index, tile) in &self.tiles {
+            if let Some(world) = tile._data.picking.intersect(ray, false) {
+                let entry = &m.tiles[*index];
+                let easting = m.origin[0] + world.x as f64;
+                let northing = m.origin[1] - world.z as f64;
+                return Some(crate::terrain_picking::TerrainHit {
+                    tile: entry.id.clone(),
+                    world,
+                    row: ((entry.bounds[3] - northing) / m.cell_size).clamp(0.0, m.stride as f64),
+                    column: ((easting - entry.bounds[0]) / m.cell_size).clamp(0.0, m.stride as f64),
+                    easting,
+                    northing,
+                    elevation: m.origin[2] + world.y as f64,
+                    geographic: crate::terrain_picking::geographic(&m.crs, easting, northing),
+                    coarse: false,
+                });
+            }
+        }
+        None
+    }
     pub fn surface_marker(
         &self,
         hit: &crate::terrain_picking::TerrainHit,

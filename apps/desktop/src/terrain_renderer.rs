@@ -137,6 +137,7 @@ pub fn load_orthophoto(
 
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {
+    first_person: Option<(Vec3, Vec3)>,
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
@@ -148,6 +149,7 @@ pub struct Camera {
 impl Camera {
     pub fn new(extent: f32, relief: f32) -> Self {
         let mut c = Self {
+            first_person: None,
             yaw: 0.69,
             pitch: 0.53,
             distance: 1.0,
@@ -202,6 +204,9 @@ impl Camera {
         self.constrain();
     }
     pub fn eye(&self) -> Vec3 {
+        if let Some((eye, _)) = self.first_person {
+            return eye;
+        }
         self.focus
             + Vec3::new(
                 self.yaw.sin() * self.pitch.cos(),
@@ -210,12 +215,34 @@ impl Camera {
             ) * self.distance
     }
     pub(crate) fn matrix(&self, aspect: f32) -> Mat4 {
+        if let Some((eye, direction)) = self.first_person {
+            return Mat4::perspective_rh(
+                70.0_f32.to_radians(),
+                aspect.max(0.01),
+                0.05,
+                self.extent * 8.0,
+            ) * Mat4::look_at_rh(eye, eye + direction, Vec3::Y);
+        }
         Mat4::perspective_rh(
             45.0_f32.to_radians(),
             aspect.max(0.01),
             self.extent * 0.002,
             self.distance + self.extent * 8.0 + self.relief,
         ) * Mat4::look_at_rh(self.eye(), self.focus, Vec3::Y)
+    }
+    pub fn ground_view(eye: Vec3, heading: f32, pitch: f32, extent: f32) -> Self {
+        let mut c = Self::new(extent, 1.0);
+        c.focus = eye;
+        c.distance = 0.0;
+        c.first_person = Some((
+            eye,
+            Vec3::new(
+                heading.sin() * pitch.cos(),
+                pitch.sin(),
+                -heading.cos() * pitch.cos(),
+            ),
+        ));
+        c
     }
 }
 
