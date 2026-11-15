@@ -278,6 +278,52 @@ pub struct NavigationRoute {
     pub cells: usize,
     pub policy: RoutePolicy,
 }
+pub struct RouteComparison {
+    pub shortest: NavigationRoute,
+    pub lower_risk: NavigationRoute,
+}
+impl RouteComparison {
+    pub fn identical(&self) -> bool {
+        self.shortest.samples.len() == self.lower_risk.samples.len()
+            && self
+                .shortest
+                .samples
+                .iter()
+                .zip(&self.lower_risk.samples)
+                .all(|(a, b)| a.x == b.x && a.z == b.z)
+    }
+    pub fn additional_distance(&self) -> f64 {
+        (self.lower_risk.length - self.shortest.length).max(0.0)
+    }
+}
+impl NavigationGrid {
+    pub fn compare(
+        &self,
+        start: [f64; 2],
+        goal: [f64; 2],
+        policy: RoutePolicy,
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<RouteComparison, String> {
+        let shortest = self.route(
+            start,
+            goal,
+            RoutePolicy {
+                max_slope_deg: policy.max_slope_deg,
+                slope_weight: 0.0,
+                elevation_weight: 0.0,
+            },
+            &mut cancelled,
+        )?;
+        if cancelled() {
+            return Err("Route comparison cancelled".into());
+        }
+        let lower_risk = self.route(start, goal, policy, &mut cancelled)?;
+        Ok(RouteComparison {
+            shortest,
+            lower_risk,
+        })
+    }
+}
 pub struct Request {
     pub revision: u64,
     pub start: [f64; 2],
@@ -286,7 +332,7 @@ pub struct Request {
 }
 pub struct RouteWorker {
     tx: mpsc::SyncSender<Request>,
-    pub results: mpsc::Receiver<(u64, Result<NavigationRoute, String>)>,
+    pub results: mpsc::Receiver<(u64, Result<RouteComparison, String>)>,
     pub revision: Arc<AtomicU64>,
 }
 impl RouteWorker {
@@ -307,7 +353,7 @@ impl RouteWorker {
                         if grid.is_none() {
                             grid = Some(NavigationGrid::load(&path)?);
                         }
-                        grid.as_ref().unwrap().route(
+                        grid.as_ref().unwrap().compare(
                             request.start,
                             request.goal,
                             request.policy,
@@ -456,5 +502,58 @@ mod tests {
             .unwrap();
         assert_eq!(r.gain, 0.0);
         assert!((r.loss - 4.5).abs() < 1e-9);
+    }
+    #[test]
+    fn comparison_zero_penalties_yields_identical_routes() {
+        let g = grid();
+        let c = g
+            .compare([997.0, 2003.0], [1003.0, 1997.0], policy(), || false)
+            .unwrap();
+        assert!(c.identical());
+        assert_eq!(c.additional_distance(), 0.0);
+        assert_eq!(c.shortest.policy.slope_weight, 0.0);
+        assert_eq!(c.shortest.policy.elevation_weight, 0.0);
+        assert_eq!(c.shortest.start.world, c.lower_risk.start.world);
+        assert_eq!(c.shortest.goal.world, c.lower_risk.goal.world);
+    }
+    #[test]
+    fn comparison_selects_a_longer_flatter_route_around_a_measured_rise() {
+        let mut g = grid();
+        g.heights.fill(100.0);
+        for x in 1..6 {
+            g.heights[3 * 7 + x] = 100.3;
+        }
+        let p = RoutePolicy {
+            max_slope_deg: 45.0,
+            slope_weight: 5.0,
+            elevation_weight: 5.0,
+        };
+        let c = g
+            .compare([997.0, 2000.0], [1003.0, 2000.0], p, || false)
+            .unwrap();
+        assert!(!c.identical());
+        assert!(c.lower_risk.length > c.shortest.length);
+        assert!(c.lower_risk.max_slope < c.shortest.max_slope);
+        assert!(c.lower_risk.gain < c.shortest.gain);
+        assert!(
+            (c.additional_distance() - (c.lower_risk.length - c.shortest.length)).abs() < 1e-10
+        );
+        assert_eq!(
+            c.shortest.policy.max_slope_deg,
+            c.lower_risk.policy.max_slope_deg
+        );
+    }
+    #[test]
+    fn comparison_rejects_nodata_and_cancellation_without_partial_results() {
+        let mut g = grid();
+        assert!(g
+            .compare([997.0, 2003.0], [1003.0, 1997.0], policy(), || true)
+            .is_err());
+        for x in 0..7 {
+            g.heights[3 * 7 + x] = f64::NAN;
+        }
+        assert!(g
+            .compare([997.0, 2003.0], [1003.0, 1997.0], policy(), || false)
+            .is_err());
     }
 }

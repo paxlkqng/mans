@@ -69,7 +69,8 @@ impl Default for SavedState {
 
 struct MissionApp {
     route_worker: Option<terrain_navigation::RouteWorker>,
-    route_3d: Option<terrain_navigation::NavigationRoute>,
+    route_3d: Option<terrain_navigation::RouteComparison>,
+    route_visible: [bool; 2],
     route_revision: u64,
     route_busy: bool,
     route_error: Option<String>,
@@ -261,6 +262,7 @@ impl MissionApp {
             .map_err(|e| tracing::error!(%e,"route worker creation failed"))
             .ok(),
             route_3d: None,
+            route_visible: [true, true],
             route_revision: 0,
             route_busy: false,
             route_error: None,
@@ -553,12 +555,17 @@ impl MissionApp {
             self.route_busy = false;
             match result {
                 Ok(route) => {
-                    tracing::info!(cells=route.cells,length=route.length,gain=route.gain,loss=route.loss,slope=route.max_slope,start=%route.start.tile,goal=%route.goal.tile,"multi-tile route completed");
-                    self.start_3d = Some(route.start.clone());
-                    self.goal_3d = Some(route.goal.clone());
+                    tracing::info!(
+                        shortest = route.shortest.length,
+                        lower_risk = route.lower_risk.length,
+                        identical = route.identical(),
+                        "dual-route comparison completed"
+                    );
+                    self.start_3d = Some(route.shortest.start.clone());
+                    self.goal_3d = Some(route.shortest.goal.clone());
                     self.message = format!(
-                        "3D route: {:.1} m · {} cells · full-resolution HiRISE",
-                        route.length, route.cells
+                        "Shortest {:.1} m · Lower-risk {:.1} m · full-resolution HiRISE",
+                        route.shortest.length, route.lower_risk.length
                     );
                     if let Some(renderer) = self
                         .render_state
@@ -878,47 +885,65 @@ impl MissionApp {
             Color32::from_gray(178),
         );
         if self.dataset == 0 && self.gpu_diagnostic {
-            if let Some(route) = &self.route_3d {
-                let min = route
-                    .samples
+            if let Some(comparison) = &self.route_3d {
+                let routes = [&comparison.shortest, &comparison.lower_risk];
+                let visible: Vec<_> = routes
                     .iter()
+                    .enumerate()
+                    .filter(|(i, _)| self.route_visible[*i])
+                    .collect();
+                let min = visible
+                    .iter()
+                    .flat_map(|(_, r)| r.samples.iter())
                     .map(|p| p.elevation)
                     .fold(f64::INFINITY, f64::min);
-                let max = route
-                    .samples
+                let max = visible
                     .iter()
+                    .flat_map(|(_, r)| r.samples.iter())
                     .map(|p| p.elevation)
                     .fold(f64::NEG_INFINITY, f64::max);
-                let line = route
-                    .samples
+                let distance = routes
                     .iter()
-                    .map(|p| {
-                        Pos2::new(
-                            rect.left()
-                                + 8.0
-                                + (p.distance / route.length.max(1e-9)) as f32
-                                    * (rect.width() - 16.0),
-                            rect.bottom()
-                                - 18.0
-                                - ((p.elevation - min) / (max - min).max(1.0)) as f32
-                                    * (rect.height() - 44.0),
-                        )
-                    })
-                    .collect();
-                painter.add(egui::Shape::line(
-                    line,
-                    Stroke::new(1.5_f32, Color32::from_rgb(20, 230, 240)),
-                ));
-                painter.text(
-                    rect.left_bottom() + Vec2::new(8.0, -2.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    format!(
-                        "0–{:.1} m along route · elevation {:.1} to {:.1} m",
-                        route.length, min, max
-                    ),
-                    egui::TextStyle::Small.resolve(ui.style()),
-                    Color32::GRAY,
-                );
+                    .map(|r| r.length)
+                    .fold(0.0_f64, f64::max)
+                    .max(1e-9);
+                for (index, route) in &visible {
+                    let line = route
+                        .samples
+                        .iter()
+                        .map(|p| {
+                            Pos2::new(
+                                rect.left()
+                                    + 8.0
+                                    + (p.distance / distance) as f32 * (rect.width() - 16.0),
+                                rect.bottom()
+                                    - 18.0
+                                    - ((p.elevation - min) / (max - min).max(1.0)) as f32
+                                        * (rect.height() - 44.0),
+                            )
+                        })
+                        .collect();
+                    painter.add(egui::Shape::line(
+                        line,
+                        Stroke::new(
+                            1.5_f32,
+                            if *index == 0 {
+                                Color32::from_rgb(255, 166, 20)
+                            } else {
+                                Color32::from_rgb(5, 237, 255)
+                            },
+                        ),
+                    ));
+                }
+                if !visible.is_empty() {
+                    painter.text(
+                        rect.left_bottom() + Vec2::new(8.0, -2.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("0–{distance:.1} m along route · elevation {min:.1} to {max:.1} m"),
+                        egui::TextStyle::Small.resolve(ui.style()),
+                        Color32::GRAY,
+                    );
+                }
             }
             return;
         }
@@ -1007,7 +1032,9 @@ impl eframe::App for MissionApp {
                         ui.label(
                             self.route_3d
                                 .as_ref()
-                                .map(|r| format!("3D route {:.1} m", r.length))
+                                .map(|r| {
+                                    format!("Additional distance +{:.1} m", r.additional_distance())
+                                })
                                 .unwrap_or_else(|| "No active 3D route".into()),
                         );
                     } else {
@@ -1022,6 +1049,7 @@ impl eframe::App for MissionApp {
             .default_width(212.0)
             .resizable(true)
             .show(ctx, |ui| {
+                egui::ScrollArea::vertical().id_salt("explorer_scroll").show(ui,|ui| {
                 ui.heading("Data explorer");
                 let mut selected = self.dataset;
                 egui::ComboBox::from_id_salt("terrain_dataset")
@@ -1124,7 +1152,8 @@ impl eframe::App for MissionApp {
                 ui.label(egui::RichText::new("Route policy").strong());
                 if self.dataset==0 && self.gpu_diagnostic {
                     let changed=ui.add(egui::Slider::new(&mut self.route_policy.max_slope_deg,5.0..=45.0).text("Slope limit °")).changed()
-                        | ui.add(egui::Slider::new(&mut self.route_policy.slope_weight,0.0..=5.0).text("Slope penalty")).changed();
+                        | ui.add(egui::Slider::new(&mut self.route_policy.slope_weight,0.0..=5.0).text("Slope penalty")).changed()
+                        | ui.add(egui::Slider::new(&mut self.route_policy.elevation_weight,0.0..=5.0).text("Elevation penalty")).changed();
                     if changed {self.invalidate_3d_route();}
                     ui.small("Analyst assumptions, not a safety certification. NoData is blocked; no mapped obstacle dataset is supplied.");
                 } else {
@@ -1146,6 +1175,11 @@ impl eframe::App for MissionApp {
                 ui.selectable_value(&mut self.state.tool, Tool::Inspect, "Inspect location");
                 ui.selectable_value(&mut self.state.tool, Tool::Start, "Set start point");
                 ui.selectable_value(&mut self.state.tool, Tool::Goal, "Set destination");
+                if self.dataset==0 && self.gpu_diagnostic {
+                    ui.checkbox(&mut self.route_visible[0],egui::RichText::new("Shortest traversable route").color(Color32::from_rgb(255,166,20)));
+                    ui.checkbox(&mut self.route_visible[1],egui::RichText::new("Lower-risk terrain route").color(Color32::from_rgb(5,237,255)));
+                    if let Some(renderer)=self.render_state.renderer.write().callback_resources.get_mut::<terrain_renderer::TerrainRenderer>() {renderer.routes.visible=self.route_visible;}
+                }
                 ui.add_space(8.0);
                 if ui
                     .add_enabled(
@@ -1158,12 +1192,14 @@ impl eframe::App for MissionApp {
                 }
                 if self.route_busy {ui.spinner();}
                 if let Some(error)=&self.route_error {ui.colored_label(Color32::LIGHT_RED,error);}
+                });
             });
 
         egui::SidePanel::right("inspector")
             .default_width(245.0)
             .resizable(true)
             .show(ctx, |ui| {
+                egui::ScrollArea::vertical().id_salt("inspector_scroll").show(ui,|ui| {
                 ui.heading("Inspector");
                 ui.separator();
                 if self.dataset == 0 && self.gpu_diagnostic {
@@ -1203,14 +1239,21 @@ impl eframe::App for MissionApp {
                 }
                 ui.add_space(14.0);
                 if self.dataset==0 && self.gpu_diagnostic {
-                    ui.strong("Active 3D route");
+                    ui.strong("Route comparison");
                     if let Some(r)=&self.route_3d {
-                        ui.monospace(format!("Surface length {:.1} m",r.length));
-                        ui.monospace(format!("Horizontal {:.1} m",r.horizontal));
-                        ui.monospace(format!("Gain +{:.1} m / Loss −{:.1} m",r.gain,r.loss));
-                        ui.monospace(format!("Max slope {:.1}°",r.max_slope));
-                        ui.monospace(format!("{} traversed cells",r.cells));
-                        ui.small(format!("Policy: ≤{:.1}° · slope penalty {:.1}",r.policy.max_slope_deg,r.policy.slope_weight));
+                        for (index,(label,route)) in [("Shortest traversable",&r.shortest),("Lower-risk terrain",&r.lower_risk)].into_iter().enumerate() {
+                            ui.colored_label(if index==0 {Color32::from_rgb(255,166,20)} else {Color32::from_rgb(5,237,255)},label);
+                            ui.monospace(format!("Distance {:.1} m",route.length));
+                            ui.monospace(format!("Max slope {:.1}°",route.max_slope));
+                            ui.monospace(format!("Gain +{:.1} / Loss −{:.1} m",route.gain,route.loss));
+                            let extra=if index==0 {0.0} else {r.additional_distance()};
+                            let percent=if r.shortest.length>0.0 {extra/r.shortest.length*100.0} else {0.0};
+                            ui.small(format!("Additional distance +{extra:.1} m ({percent:.2}%)"));
+                            ui.small(format!("{} samples · horizontal {:.1} m",route.cells,route.horizontal));
+                        }
+                        if r.identical() {ui.strong("Routes are identical.");}
+                        ui.small(format!("Shared slope limit {:.1}°; lower-risk penalties: slope {:.1}, elevation {:.1}.",r.lower_risk.policy.max_slope_deg,r.lower_risk.policy.slope_weight,r.lower_risk.policy.elevation_weight));
+                        ui.small("Lower-risk is a cost policy, not a measured safety rating.");
                         ui.small("Endpoints snapped to nearest measured sample (≤0.72 m). Route tiles use full geometry; unloaded route sections are hidden.");
                     } else {ui.small(if self.route_busy {"Searching full-resolution terrain…"} else {"Select endpoints and calculate a route."});}
                     if let Some(e)=&self.route_error {ui.colored_label(Color32::LIGHT_RED,e);}
@@ -1241,6 +1284,7 @@ impl eframe::App for MissionApp {
                     ui.small(&metadata.vertical_datum);
                     ui.hyperlink_to("PDS source product", &metadata.source_url);
                 }
+                });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
