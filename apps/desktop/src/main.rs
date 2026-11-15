@@ -71,6 +71,13 @@ impl Default for SavedState {
 }
 
 struct MissionApp {
+    obstructions: Vec<terrain_navigation::TerrainObstruction>,
+    add_obstruction: bool,
+    obstruction_radius: f64,
+    obstruction_residency: u16,
+    replan_previous: Option<f64>,
+    replan_distances: Option<[f64; 2]>,
+    obstruction_status: String,
     navigation_mode: bool,
     astronaut: Option<astronaut::Astronaut>,
     navigation_route: usize,
@@ -257,6 +264,13 @@ impl MissionApp {
             })
             .unwrap_or(camera);
         let mut app = Self {
+            obstructions: vec![],
+            add_obstruction: false,
+            obstruction_radius: 10.0,
+            obstruction_residency: u16::MAX,
+            replan_previous: None,
+            replan_distances: None,
+            obstruction_status: "No simulated obstructions".into(),
             terrain,
             state,
             route: Vec::new(),
@@ -349,6 +363,7 @@ impl MissionApp {
             .callback_resources
             .insert(renderer);
         self.dataset = dataset;
+        self.obstruction_residency = u16::MAX;
         self.last_terrain_click = None;
         self.selected_3d = None;
         self.start_3d = None;
@@ -507,6 +522,7 @@ impl MissionApp {
                 .store(self.route_revision, std::sync::atomic::Ordering::Relaxed);
         }
         self.route_3d = None;
+        self.replan_previous = None;
         self.route_busy = false;
         self.route_error = None;
         if let Some(renderer) = self
@@ -540,6 +556,7 @@ impl MissionApp {
             .ok_or_else(|| "Route worker unavailable".to_string())
             .and_then(|worker| {
                 worker.request(terrain_navigation::Request {
+                    obstructions: self.obstructions.clone(),
                     revision: self.route_revision,
                     start,
                     goal,
@@ -566,9 +583,23 @@ impl MissionApp {
             self.route_busy = false;
             match result {
                 Ok(route) => {
-                    if self.navigation_mode {
+                    self.route_error = None;
+                    let from_astronaut = self.replan_previous.is_some();
+                    if let Some(previous) = self.replan_previous.take() {
+                        self.replan_distances = Some([previous, route.lower_risk.length]);
+                        self.navigation_route = 1;
+                        self.route_visible[1] = true;
+                        self.obstruction_status =
+                            "Replanning succeeded · lower-risk route active".into();
+                    } else {
+                        self.obstruction_status = format!(
+                            "Routes updated · {} simulated obstruction zones applied",
+                            self.obstructions.len()
+                        );
+                    }
+                    if self.navigation_mode || from_astronaut {
                         if let Some(a) = &mut self.astronaut {
-                            a.waypoint = 0;
+                            a.accept_replan();
                         }
                     } else {
                         self.astronaut = None;
@@ -592,12 +623,15 @@ impl MissionApp {
                         .callback_resources
                         .get_mut::<terrain_renderer::TerrainRenderer>()
                     {
+                        renderer.routes.visible = self.route_visible;
                         renderer.routes.set(&self.render_state.device, Some(&route));
                     }
                     self.route_3d = Some(route);
                 }
                 Err(e) => {
                     tracing::warn!(%e,"multi-tile route failed");
+                    self.replan_previous = None;
+                    self.obstruction_status = format!("Replanning failed · {e}");
                     self.message = e.clone();
                     self.route_error = Some(e);
                 }
@@ -641,25 +675,162 @@ impl MissionApp {
         self.navigation_mode = true;
     }
     fn recalculate_from_astronaut(&mut self) {
-        let Some(a) = &self.astronaut else {
+        if self.route_busy {
+            return;
+        }
+        let (Some(a), Some(goal), Some(m)) = (&self.astronaut, &self.goal_3d, &self.tile_manifest)
+        else {
             return;
         };
-        let hit = self
-            .render_state
-            .renderer
-            .read()
-            .callback_resources
-            .get::<terrain_renderer::TerrainRenderer>()
-            .and_then(|r| r.ground(a.ground.x, a.ground.z));
-        if let Some(hit) = hit {
-            self.start_3d = Some(hit);
-            self.calculate_active_route();
-        } else if let Some(a) = &mut self.astronaut {
-            a.error = Some(
-                "Cannot recalculate: measured terrain at the simulated position is unavailable."
-                    .into(),
-            );
+        let start = a.projected_position(m.origin);
+        let goal = [goal.easting, goal.northing];
+        self.replan_distances = None;
+        self.replan_previous = self.route_3d.as_ref().map(|routes| {
+            a.remaining_distance(if self.navigation_route == 0 {
+                &routes.shortest
+            } else {
+                &routes.lower_risk
+            })
+        });
+        self.route_revision += 1;
+        let result = self
+            .route_worker
+            .as_ref()
+            .ok_or_else(|| "Route worker unavailable".to_string())
+            .and_then(|worker| {
+                worker
+                    .revision
+                    .store(self.route_revision, std::sync::atomic::Ordering::Relaxed);
+                worker.request(terrain_navigation::Request {
+                    revision: self.route_revision,
+                    start,
+                    goal,
+                    policy: self.route_policy,
+                    obstructions: self.obstructions.clone(),
+                })
+            });
+        match result {
+            Ok(()) => {
+                self.route_busy = true;
+                self.route_error = None;
+                self.obstruction_status =
+                    "Replanning from current simulated position · movement paused".into();
+            }
+            Err(e) => {
+                self.replan_previous = None;
+                self.route_error = Some(e.clone());
+                self.obstruction_status = e;
+            }
         }
+    }
+    fn obstruction_controls(&mut self, ui: &mut egui::Ui) {
+        if self.dataset != 0 || !self.gpu_diagnostic {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("Terrain Obstruction");
+            ui.small("SIMULATED / USER-DEFINED");
+            if ui
+                .add_enabled(
+                    !self.route_busy,
+                    egui::Button::new("Add Obstruction").selected(self.add_obstruction),
+                )
+                .clicked()
+            {
+                self.add_obstruction = !self.add_obstruction;
+            }
+            ui.add_enabled(
+                !self.route_busy,
+                egui::DragValue::new(&mut self.obstruction_radius)
+                    .range(1.0..=50.0)
+                    .suffix(" m radius"),
+            );
+            if ui
+                .add_enabled(!self.route_busy, egui::Button::new("Recalculate Route"))
+                .clicked()
+            {
+                if self.astronaut.is_some() {
+                    self.recalculate_from_astronaut();
+                } else {
+                    self.calculate_active_route();
+                }
+            }
+            if ui
+                .add_enabled(
+                    !self.route_busy && !self.obstructions.is_empty(),
+                    egui::Button::new("Clear Obstructions"),
+                )
+                .clicked()
+            {
+                self.obstructions.clear();
+                self.replan_distances = None;
+                self.route_error = None;
+                self.add_obstruction = false;
+                self.update_obstruction_markers();
+                self.obstruction_status =
+                    "Obstructions cleared · recalculate to update route".into();
+            }
+            ui.label(format!("{} zones", self.obstructions.len()));
+        });
+        ui.small(if self.add_obstruction { "Click a measured terrain surface to place a simulated obstruction; dragging still controls the camera." } else { &self.obstruction_status });
+        if let Some([old, new]) = self.replan_distances {
+            ui.small(format!(
+                "Previous remaining {old:.1} m · New {new:.1} m · Difference {:+.1} m",
+                new - old
+            ));
+        }
+        if let Some(error) = &self.route_error {
+            ui.colored_label(Color32::YELLOW, error);
+        }
+    }
+    fn place_obstruction(&mut self, hit: terrain_picking::TerrainHit) {
+        self.replan_distances = None;
+        self.route_error = None;
+        self.obstructions
+            .push(terrain_navigation::TerrainObstruction {
+                center_easting: hit.easting,
+                center_northing: hit.northing,
+                radius_m: self.obstruction_radius,
+            });
+        self.add_obstruction = false;
+        self.obstruction_status="Simulated obstruction added · current route may be obstructed; recalculate before proceeding".into();
+        self.update_obstruction_markers();
+    }
+    fn update_obstruction_markers(&mut self) {
+        let Some(m) = &self.tile_manifest else {
+            return;
+        };
+        let mut guard = self.render_state.renderer.write();
+        let Some(r) = guard
+            .callback_resources
+            .get_mut::<terrain_renderer::TerrainRenderer>()
+        else {
+            return;
+        };
+        let mut segments = vec![];
+        for zone in &self.obstructions {
+            let sample = |i: usize| {
+                let angle = i as f64 * std::f64::consts::TAU / 128.0;
+                r.ground(
+                    (zone.center_easting + zone.radius_m * angle.cos() - m.origin[0]) as f32,
+                    (m.origin[1] - zone.center_northing - zone.radius_m * angle.sin()) as f32,
+                )
+            };
+            for i in 0..128 {
+                if let (Some(a), Some(b)) = (sample(i), sample(i + 1)) {
+                    if let Some(tile) = m.tiles.iter().position(|t| t.id == a.tile) {
+                        segments.push(terrain_navigation::RouteSegment {
+                            tile,
+                            a: a.world.to_array(),
+                            b: b.world.to_array(),
+                        });
+                    }
+                }
+            }
+        }
+        self.obstruction_residency = r.resident_tile_mask();
+        r.routes
+            .set_obstructions(&self.render_state.device, &segments);
     }
     fn draw_astronaut(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -716,9 +887,27 @@ impl MissionApp {
             let renderer = guard
                 .callback_resources
                 .get::<terrain_renderer::TerrainRenderer>();
+            let movement = if self.route_busy || self.add_obstruction {
+                glam::Vec2::ZERO
+            } else {
+                movement
+            };
+            let m = self.tile_manifest.as_ref().unwrap();
+            let mut obstruction_stop = false;
             a.move_ground(movement, dt, |x, z| {
+                if self
+                    .obstructions
+                    .iter()
+                    .any(|zone| zone.contains(m.origin[0] + x as f64, m.origin[1] - z as f64))
+                {
+                    obstruction_stop = true;
+                    return None;
+                }
                 renderer.and_then(|r| r.ground(x, z)).map(|hit| hit.world.y)
             });
+            if obstruction_stop {
+                a.error=Some("Movement stopped at a SIMULATED / USER-DEFINED obstruction. Recalculate Route or Clear Obstructions.".into());
+            }
         }
         let m = self.tile_manifest.as_ref().unwrap();
         let camera = terrain_renderer::Camera::ground_view(a.eye(), a.heading, a.pitch, m.extent());
@@ -809,6 +998,21 @@ impl MissionApp {
                     Color32::WHITE
                 },
             );
+        }
+        if self.add_obstruction && response.clicked() && !self.route_busy {
+            let hit = response.interact_pointer_pos().and_then(|mouse| {
+                self.render_state
+                    .renderer
+                    .read()
+                    .callback_resources
+                    .get::<terrain_renderer::TerrainRenderer>()
+                    .and_then(|r| r.pick(camera, rect, mouse))
+            });
+            if let Some(hit) = hit {
+                self.place_obstruction(hit);
+            } else {
+                self.obstruction_status = "No valid loaded terrain at selected position".into();
+            }
         }
         ui.ctx().request_repaint();
     }
@@ -919,15 +1123,19 @@ impl MissionApp {
                             "{} · E {:.3} / N {:.3} m · Elevation {:.3} m",
                             hit.tile, hit.easting, hit.northing, hit.elevation
                         );
-                        match self.state.tool {
-                            Tool::Inspect => {}
-                            Tool::Start => {
-                                self.invalidate_3d_route();
-                                self.start_3d = Some(hit.clone());
-                            }
-                            Tool::Goal => {
-                                self.invalidate_3d_route();
-                                self.goal_3d = Some(hit.clone());
+                        if self.add_obstruction && !self.route_busy {
+                            self.place_obstruction(hit.clone());
+                        } else {
+                            match self.state.tool {
+                                Tool::Inspect => {}
+                                Tool::Start => {
+                                    self.invalidate_3d_route();
+                                    self.start_3d = Some(hit.clone());
+                                }
+                                Tool::Goal => {
+                                    self.invalidate_3d_route();
+                                    self.goal_3d = Some(hit.clone());
+                                }
                             }
                         }
                         tracing::info!(tile=%hit.tile,row=hit.row,column=hit.column,easting=hit.easting,northing=hit.northing,elevation=hit.elevation,coarse=hit.coarse,"3D terrain picked");
@@ -1210,6 +1418,18 @@ impl MissionApp {
 impl eframe::App for MissionApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_3d_route();
+        if self.dataset == 0 && !self.obstructions.is_empty() {
+            let mask = self
+                .render_state
+                .renderer
+                .read()
+                .callback_resources
+                .get::<terrain_renderer::TerrainRenderer>()
+                .map(|r| r.resident_tile_mask());
+            if mask.is_some_and(|mask| mask != self.obstruction_residency) {
+                self.update_obstruction_markers();
+            }
+        }
         if self.dataset == 0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
@@ -1219,6 +1439,11 @@ impl eframe::App for MissionApp {
                     if ui.button("Reset mission state").clicked() {
                         self.navigation_mode = false;
                         self.astronaut = None;
+                        self.obstructions.clear();
+                        self.add_obstruction = false;
+                        self.replan_distances = None;
+                        self.obstruction_status = "No simulated obstructions".into();
+                        self.update_obstruction_markers();
                         self.invalidate_3d_route();
                         self.start_3d = None;
                         self.goal_3d = None;
@@ -1558,6 +1783,7 @@ impl eframe::App for MissionApp {
             });
         }
         egui::CentralPanel::default().show(ctx, |ui| {
+            self.obstruction_controls(ui);
             if self.navigation_mode {
                 self.draw_astronaut(ui);
                 return;

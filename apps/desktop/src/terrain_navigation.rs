@@ -10,6 +10,18 @@ use std::{
     },
 };
 
+/// Manually introduced simulation event in the dataset's projected metres.
+#[derive(Clone, Copy, Debug)]
+pub struct TerrainObstruction {
+    pub center_easting: f64,
+    pub center_northing: f64,
+    pub radius_m: f64,
+}
+impl TerrainObstruction {
+    pub fn contains(&self, e: f64, n: f64) -> bool {
+        (e - self.center_easting).hypot(n - self.center_northing) <= self.radius_m
+    }
+}
 pub struct NavigationGrid {
     pub manifest: Manifest,
     pub size: usize,
@@ -165,20 +177,65 @@ impl NavigationGrid {
         policy: RoutePolicy,
         cancelled: impl FnMut() -> bool,
     ) -> Result<NavigationRoute, String> {
+        self.route_masked(start, goal, policy, None, cancelled)
+    }
+    pub fn obstruction_mask(&self, zones: &[TerrainObstruction]) -> Result<Vec<bool>, String> {
+        let mut mask = vec![false; self.heights.len()];
+        let cell = self.manifest.cell_size;
+        for zone in zones {
+            if !zone.center_easting.is_finite()
+                || !zone.center_northing.is_finite()
+                || !zone.radius_m.is_finite()
+                || zone.radius_m <= 0.0
+            {
+                return Err("Invalid simulated obstruction coordinates/radius".into());
+            }
+            let cx = (zone.center_easting - self.left) / cell;
+            let cz = (self.top - zone.center_northing) / cell;
+            let r = zone.radius_m / cell;
+            let lo = |v: f64| v.floor().clamp(0.0, (self.size - 1) as f64) as usize;
+            let hi = |v: f64| v.ceil().clamp(0.0, (self.size - 1) as f64) as usize;
+            for z in lo(cz - r)..=hi(cz + r) {
+                for x in lo(cx - r)..=hi(cx + r) {
+                    if zone.contains(self.left + x as f64 * cell, self.top - z as f64 * cell) {
+                        mask[z * self.size + x] = true;
+                    }
+                }
+            }
+        }
+        Ok(mask)
+    }
+    pub fn route_masked(
+        &self,
+        start: [f64; 2],
+        goal: [f64; 2],
+        policy: RoutePolicy,
+        blocked: Option<&[bool]>,
+        cancelled: impl FnMut() -> bool,
+    ) -> Result<NavigationRoute, String> {
+        if blocked.is_some_and(|m| m.len() != self.heights.len()) {
+            return Err("Invalid obstruction mask dimensions".into());
+        }
         let a = self.point(start[0], start[1])?;
         let b = self.point(goal[0], goal[1])?;
+        if blocked.is_some_and(|m| m[a.z * self.size + a.x]) {
+            return Err("Current/start position is inside the simulated obstruction mask. Clear obstructions or move outside the zone before replanning.".into());
+        }
+        if blocked.is_some_and(|m| m[b.z * self.size + b.x]) {
+            return Err("Destination is inside the simulated obstruction mask.".into());
+        }
         let path = astar_with_policy(
             &self.heights,
             self.size,
             self.manifest.cell_size,
             a,
             b,
-            None,
+            blocked,
             policy,
             cancelled,
         );
         if path.is_empty() {
-            return Err("No route under this slope policy and valid-data mask. No fallback path was generated.".into());
+            return Err("No traversable route under the slope, NoData and simulated obstruction constraints. No fallback path generated.".into());
         }
         let mut samples = vec![];
         for (index, p) in path.iter().enumerate() {
@@ -304,20 +361,42 @@ impl NavigationGrid {
         policy: RoutePolicy,
         mut cancelled: impl FnMut() -> bool,
     ) -> Result<RouteComparison, String> {
-        let shortest = self.route(
-            start,
-            goal,
-            RoutePolicy {
-                max_slope_deg: policy.max_slope_deg,
-                slope_weight: 0.0,
-                elevation_weight: 0.0,
-            },
-            &mut cancelled,
-        )?;
+        self.compare_obstructed(start, goal, policy, &[], &mut cancelled)
+    }
+    pub fn compare_obstructed(
+        &self,
+        start: [f64; 2],
+        goal: [f64; 2],
+        policy: RoutePolicy,
+        zones: &[TerrainObstruction],
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<RouteComparison, String> {
+        if zones.iter().any(|z| z.contains(start[0], start[1])) {
+            return Err("Current/start position is inside a simulated obstruction. Clear obstructions or move outside before replanning.".into());
+        }
+        let mask = if zones.is_empty() {
+            None
+        } else {
+            Some(self.obstruction_mask(zones)?)
+        };
+        let shortest_policy = RoutePolicy {
+            max_slope_deg: policy.max_slope_deg,
+            slope_weight: 0.0,
+            elevation_weight: 0.0,
+        };
+        let shortest = match mask.as_deref() {
+            Some(mask) => {
+                self.route_masked(start, goal, shortest_policy, Some(mask), &mut cancelled)
+            }
+            None => self.route(start, goal, shortest_policy, &mut cancelled),
+        }?;
         if cancelled() {
             return Err("Route comparison cancelled".into());
         }
-        let lower_risk = self.route(start, goal, policy, &mut cancelled)?;
+        let lower_risk = match mask.as_deref() {
+            Some(mask) => self.route_masked(start, goal, policy, Some(mask), &mut cancelled),
+            None => self.route(start, goal, policy, &mut cancelled),
+        }?;
         Ok(RouteComparison {
             shortest,
             lower_risk,
@@ -325,6 +404,7 @@ impl NavigationGrid {
     }
 }
 pub struct Request {
+    pub obstructions: Vec<TerrainObstruction>,
     pub revision: u64,
     pub start: [f64; 2],
     pub goal: [f64; 2],
@@ -353,12 +433,19 @@ impl RouteWorker {
                         if grid.is_none() {
                             grid = Some(NavigationGrid::load(&path)?);
                         }
-                        grid.as_ref().unwrap().compare(
-                            request.start,
-                            request.goal,
-                            request.policy,
-                            || current.load(Ordering::Relaxed) != request.revision,
-                        )
+                        let grid = grid.as_ref().unwrap();
+                        let cancelled = || current.load(Ordering::Relaxed) != request.revision;
+                        if request.obstructions.is_empty() {
+                            grid.compare(request.start, request.goal, request.policy, cancelled)
+                        } else {
+                            grid.compare_obstructed(
+                                request.start,
+                                request.goal,
+                                request.policy,
+                                &request.obstructions,
+                                cancelled,
+                            )
+                        }
                     })();
                     if current.load(Ordering::Relaxed) == request.revision
                         && out.send((request.revision, result)).is_err()
@@ -432,6 +519,118 @@ mod tests {
             slope_weight: 0.0,
             elevation_weight: 0.0,
         }
+    }
+    fn zone(e: f64, n: f64, radius: f64) -> TerrainObstruction {
+        TerrainObstruction {
+            center_easting: e,
+            center_northing: n,
+            radius_m: radius,
+        }
+    }
+    #[test]
+    fn obstruction_projection_radius_boundary_cross_tile_and_clear() {
+        let g = grid();
+        let zones = [zone(999.0, 2001.0, 1.0)];
+        let mask = g.obstruction_mask(&zones).unwrap();
+        assert_eq!(mask.iter().filter(|v| **v).count(), 5);
+        for (x, z) in [(2, 2), (1, 2), (3, 2), (2, 1), (2, 3)] {
+            assert!(mask[z * 7 + x]);
+        }
+        assert!(!mask[1 * 7 + 1]);
+        let owners: std::collections::HashSet<_> = (0..49)
+            .filter(|i| mask[*i])
+            .map(|i| g.hit(Point { x: i % 7, z: i / 7 }).tile)
+            .collect();
+        assert!(owners.len() >= 3);
+        assert!(g.obstruction_mask(&[]).unwrap().iter().all(|b| !*b));
+        assert!(g
+            .obstruction_mask(&[zone(999.0, 2001.0, f64::NAN)])
+            .is_err());
+    }
+    #[test]
+    fn obstruction_detour_nodata_and_clearing_restore_traversability() {
+        let mut g = grid();
+        g.heights.fill(100.0);
+        g.heights[0] = f64::NAN;
+        let start = [997.0, 2000.0];
+        let goal = [1003.0, 2000.0];
+        let original = g.compare(start, goal, policy(), || false).unwrap();
+        let zones = [zone(1000.0, 2000.0, 1.0)];
+        let mask = g.obstruction_mask(&zones).unwrap();
+        let rerouted = g
+            .compare_obstructed(start, goal, policy(), &zones, || false)
+            .unwrap();
+        for r in [&rerouted.shortest, &rerouted.lower_risk] {
+            assert!(r.length > original.shortest.length);
+            for sample in &r.samples {
+                if sample.x.fract() == 0.0 && sample.z.fract() == 0.0 {
+                    let i = sample.z as usize * 7 + sample.x as usize;
+                    assert!(!mask[i]);
+                    assert!(g.heights[i].is_finite());
+                }
+            }
+        }
+        let cleared = g
+            .compare_obstructed(start, goal, policy(), &[], || false)
+            .unwrap();
+        assert_eq!(cleared.shortest.length, original.shortest.length);
+    }
+    #[test]
+    fn obstruction_corner_cutting_and_unreachable_endpoints_are_rejected() {
+        let mut g = grid();
+        g.heights.fill(100.0);
+        let corners = [zone(998.0, 2003.0, 0.1), zone(997.0, 2002.0, 0.1)];
+        assert!(g
+            .compare_obstructed([997.0, 2003.0], [999.0, 2001.0], policy(), &corners, || {
+                false
+            })
+            .err()
+            .unwrap()
+            .contains("No traversable route"));
+    }
+    #[test]
+    fn replanning_uses_current_position_original_goal_and_reports_blocked_start() {
+        let mut g = grid();
+        g.heights.fill(100.0);
+        let original = g
+            .compare([997.0, 2003.0], [1003.0, 1997.0], policy(), || false)
+            .unwrap();
+        let mut astronaut =
+            crate::astronaut::Astronaut::new(original.lower_risk.start.world, &original.lower_risk);
+        astronaut.ground = g.hit(Point { x: 2, z: 1 }).world;
+        let position = astronaut.projected_position(g.manifest.origin);
+        let destination = [
+            original.lower_risk.goal.easting,
+            original.lower_risk.goal.northing,
+        ];
+        let zones = [zone(1000.0, 2000.0, 0.5)];
+        let r = g
+            .compare_obstructed(position, destination, policy(), &zones, || false)
+            .unwrap();
+        assert_eq!(r.lower_risk.start.world, astronaut.ground);
+        assert_eq!(r.lower_risk.goal.world, original.lower_risk.goal.world);
+        let blocked = [zone(position[0], position[1], 1.0)];
+        let before = astronaut.ground;
+        assert!(g
+            .compare_obstructed(position, destination, policy(), &blocked, || false)
+            .err()
+            .unwrap()
+            .contains("inside"));
+        assert_eq!(astronaut.ground, before);
+        assert!(g
+            .compare_obstructed(
+                position,
+                destination,
+                policy(),
+                &[zone(destination[0], destination[1], 1.0)],
+                || false
+            )
+            .is_err());
+        // Full barrier, not just blocked endpoints.
+        let wall = [zone(1000.0, 2000.0, 3.0)];
+        assert!(g
+            .compare_obstructed([997.0, 2003.0], destination, policy(), &wall, || false)
+            .is_err());
     }
     #[test]
     fn shared_edges_have_one_global_index_and_correct_tile_coordinates() {

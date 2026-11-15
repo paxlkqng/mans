@@ -185,3 +185,130 @@ fn hirise_reference_report() {
         "Numerical verification failed; inspect saved report"
     );
 }
+
+#[test]
+#[ignore = "Requires local HiRISE assets; bounded obstruction + asynchronous worker integration"]
+fn hirise_obstruction_worker_replans_from_current_position() {
+    use crate::{
+        astronaut::Astronaut,
+        terrain_navigation::{Request, RouteWorker, TerrainObstruction},
+    };
+    use std::sync::atomic::Ordering;
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/local/hirise-tiles/manifest.json");
+    let grid = NavigationGrid::load(&manifest).unwrap();
+    let original_start = grid.hit(Point { x: 1005, z: 1005 });
+    let goal = grid.hit(Point { x: 1040, z: 1040 });
+    let original = grid
+        .compare(
+            [original_start.easting, original_start.northing],
+            [goal.easting, goal.northing],
+            RoutePolicy::default(),
+            || false,
+        )
+        .unwrap();
+    let mut astronaut = Astronaut::new(original.lower_risk.start.world, &original.lower_risk);
+    astronaut.ground = grid.hit(Point { x: 1009, z: 1009 }).world;
+    astronaut.heading = 1.2;
+    astronaut.pitch = -0.3;
+    let before = astronaut.ground;
+    let center = grid.hit(Point { x: 1022, z: 1022 });
+    let zones = vec![TerrainObstruction {
+        center_easting: center.easting,
+        center_northing: center.northing,
+        radius_m: 10.0,
+    }];
+    let mask = grid.obstruction_mask(&zones).unwrap();
+    assert!(
+        original.lower_risk.samples.iter().any(|s| {
+            s.x.fract() == 0.0
+                && s.z.fract() == 0.0
+                && mask[s.z as usize * grid.size + s.x as usize]
+        }),
+        "Test obstruction must actually intersect the previous route"
+    );
+    let worker = RouteWorker::new(manifest).unwrap();
+    worker.revision.store(1, Ordering::Relaxed);
+    worker
+        .request(Request {
+            revision: 1,
+            start: astronaut.projected_position(grid.manifest.origin),
+            goal: [goal.easting, goal.northing],
+            policy: RoutePolicy::default(),
+            obstructions: zones,
+        })
+        .unwrap();
+    let (revision, result) = worker
+        .results
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    assert_eq!(revision, 1);
+    let replanned = result.unwrap();
+    for route in [&replanned.shortest, &replanned.lower_risk] {
+        assert!(route.start.world.distance(before) < 0.001);
+        assert_eq!(route.goal.world, goal.world);
+        let path: Vec<_> = route
+            .samples
+            .iter()
+            .filter(|s| s.x.fract() == 0.0 && s.z.fract() == 0.0)
+            .map(|s| Point {
+                x: s.x as usize,
+                z: s.z as usize,
+            })
+            .collect();
+        let model = Model {
+            heights: &grid.heights,
+            size: grid.size,
+            spacing: grid.manifest.cell_size,
+            blocked: Some(&mask),
+            policy: route.policy,
+        };
+        let measured = model
+            .measure(
+                &path,
+                grid.point(route.start.easting, route.start.northing)
+                    .unwrap(),
+                grid.point(goal.easting, goal.northing).unwrap(),
+            )
+            .unwrap();
+        let (optimal, _) = model.dijkstra(path[0], *path.last().unwrap()).unwrap();
+        assert!((measured.cost - optimal).abs() <= tolerance(optimal));
+        assert!((measured.distance - route.length).abs() < 1e-7);
+        assert!(
+            route
+                .segments
+                .iter()
+                .map(|s| s.tile)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 1
+        );
+        assert!(route.segments.windows(2).all(|s| s[0].b == s[1].a));
+    }
+    astronaut.accept_replan();
+    assert_eq!(astronaut.ground, before);
+    assert_eq!(astronaut.heading, 1.2);
+    assert_eq!(astronaut.pitch, -0.3);
+    let current = astronaut.projected_position(grid.manifest.origin);
+    worker.revision.store(2, Ordering::Relaxed);
+    worker
+        .request(Request {
+            revision: 2,
+            start: current,
+            goal: [goal.easting, goal.northing],
+            policy: RoutePolicy::default(),
+            obstructions: vec![TerrainObstruction {
+                center_easting: current[0],
+                center_northing: current[1],
+                radius_m: 10.0,
+            }],
+        })
+        .unwrap();
+    let (_, failed) = worker
+        .results
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    assert!(failed.err().unwrap().contains("inside"));
+    assert_eq!(astronaut.ground, before);
+    eprintln!("HiRISE obstruction worker: cross-tile detour, both policy optima, current position and destination preserved; blocked-start error passed");
+}

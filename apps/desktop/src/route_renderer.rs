@@ -18,6 +18,7 @@ pub struct RouteRenderer {
     viewport: wgpu::Buffer,
     bind: wgpu::BindGroup,
     batches: HashMap<(usize, usize), (wgpu::Buffer, u32)>,
+    obstruction_batches: HashMap<usize, (wgpu::Buffer, u32)>,
     pub visible: [bool; 2], // shortest, lower-risk
 }
 impl RouteRenderer {
@@ -89,11 +90,14 @@ struct Out {@builtin(position) position:vec4<f32>,@location(0) side:f32,@locatio
             viewport,
             bind,
             batches: HashMap::new(),
+            obstruction_batches: HashMap::new(),
             visible: [true, true],
         }
     }
     pub fn contains(&self, tile: usize) -> bool {
-        (0..2).any(|policy| self.visible[policy] && self.batches.contains_key(&(tile, policy)))
+        self.obstruction_batches.contains_key(&tile)
+            || (0..2)
+                .any(|policy| self.visible[policy] && self.batches.contains_key(&(tile, policy)))
     }
     pub fn set(&mut self, device: &wgpu::Device, route: Option<&RouteComparison>) {
         self.batches.clear();
@@ -140,6 +144,42 @@ struct Out {@builtin(position) position:vec4<f32>,@location(0) side:f32,@locatio
             "3D route GPU buffers uploaded"
         );
     }
+    pub fn set_obstructions(
+        &mut self,
+        device: &wgpu::Device,
+        segments: &[crate::terrain_navigation::RouteSegment],
+    ) {
+        self.obstruction_batches.clear();
+        let mut data: HashMap<usize, Vec<RouteVertex>> = HashMap::new();
+        for s in segments {
+            for (end, side) in [
+                (0.0, -1.0),
+                (1.0, -1.0),
+                (0.0, 1.0),
+                (0.0, 1.0),
+                (1.0, -1.0),
+                (1.0, 1.0),
+            ] {
+                data.entry(s.tile).or_default().push(RouteVertex {
+                    a: s.a,
+                    b: s.b,
+                    end,
+                    side,
+                    color: [1.0, 0.22, 0.05],
+                    width: 1.2,
+                });
+            }
+        }
+        for (tile, vertices) in data {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("simulated obstruction outline"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            self.obstruction_batches
+                .insert(tile, (buffer, vertices.len() as u32));
+        }
+    }
     pub fn resize(&self, queue: &wgpu::Queue, size: [u32; 2], pixels_per_point: f32) {
         queue.write_buffer(
             &self.viewport,
@@ -156,6 +196,12 @@ struct Out {@builtin(position) position:vec4<f32>,@location(0) side:f32,@locatio
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, camera, &[]);
         pass.set_bind_group(1, &self.bind, &[]);
+        for (tile, (buffer, count)) in &self.obstruction_batches {
+            if resident.contains(tile) {
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
+            }
+        }
         // Amber under cyan; the wider amber stroke remains visible on overlaps.
         for policy in 0..2 {
             for ((tile, index), (buffer, count)) in &self.batches {

@@ -97,6 +97,38 @@ impl Astronaut {
             self.ground = next;
         }
     }
+    pub fn projected_position(&self, origin: [f64; 3]) -> [f64; 2] {
+        [
+            origin[0] + self.ground.x as f64,
+            origin[1] - self.ground.z as f64,
+        ]
+    }
+    pub fn accept_replan(&mut self) {
+        // Position, heading, pitch and camera focus deliberately persist.
+        self.waypoint = 0;
+    }
+    /// Remaining surface distance from the closest point on the active route.
+    pub fn remaining_distance(&self, route: &NavigationRoute) -> f64 {
+        let p = Vec2::new(self.ground.x, self.ground.z);
+        let mut nearest = f32::INFINITY;
+        let mut remaining = route.length;
+        let mut travelled = 0.0;
+        for segment in &route.segments {
+            let a = Vec3::from(segment.a);
+            let b = Vec3::from(segment.b);
+            let start = Vec2::new(a.x, a.z);
+            let delta = Vec2::new(b.x - a.x, b.z - a.z);
+            let t = ((p - start).dot(delta) / delta.length_squared().max(1e-9)).clamp(0.0, 1.0);
+            let d = p.distance(start + t * delta);
+            let length = a.distance(b) as f64;
+            if d < nearest {
+                nearest = d;
+                remaining = (route.length - travelled - t as f64 * length).max(0.0);
+            }
+            travelled += length;
+        }
+        remaining
+    }
     pub fn guidance(&mut self, route: &NavigationRoute) -> Guidance {
         let position = Vec2::new(self.ground.x, self.ground.z);
         let mut deviation = f32::INFINITY;
@@ -208,6 +240,25 @@ mod tests {
         assert!(a.guidance(&route).deviation > DEVIATION_LIMIT);
         a.ground = route.goal.world;
         assert!(a.guidance(&route).arrived);
+    }
+    #[test]
+    fn replan_preserves_current_position_orientation_and_remaining_distance() {
+        let r = route();
+        let mut a = Astronaut::new(Vec3::ZERO, &r);
+        a.ground = Vec3::new(0.0, 0.0, -5.0);
+        a.heading = 1.2;
+        a.pitch = -0.3;
+        a.waypoint = 1;
+        assert!((a.remaining_distance(&r) - 15.0).abs() < 1e-6);
+        assert_eq!(
+            a.projected_position([1000.0, 2000.0, 0.0]),
+            [1000.0, 2005.0]
+        );
+        a.accept_replan();
+        assert_eq!(a.ground, Vec3::new(0.0, 0.0, -5.0));
+        assert_eq!(a.heading, 1.2);
+        assert_eq!(a.pitch, -0.3);
+        assert_eq!(a.waypoint, 0);
     }
     #[test]
     fn first_person_projection_preserves_planning_camera_and_heading() {

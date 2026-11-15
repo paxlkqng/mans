@@ -1,5 +1,11 @@
 use super::*;
 impl TerrainRenderer {
+    pub fn resident_tile_mask(&self) -> u16 {
+        self.tiles
+            .keys()
+            .fold(0, |mask, index| mask | (1_u16 << index))
+    }
+
     pub fn ground(&self, x: f32, z: f32) -> Option<crate::terrain_picking::TerrainHit> {
         let m = &self.manager.as_ref()?.manifest;
         let top = (m.max_elevation - m.origin[2]) as f32 + 1.0;
