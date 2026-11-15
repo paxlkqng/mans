@@ -1,0 +1,13 @@
+{
+  "datasetName": "HiRISE stereo DTM and orthorectified image, Jezero Crater",
+  "dtmProductId": "DTEEC_045994_1985_046060_1985_U01.IMG",
+  "orthoProductId": "ESP_045994_1985_RED_C_01_ORTHO.JP2",
+  "dtmUrl": "https://www.uahirise.org/PDS/DTM/ESP/ORB_045900_045999/ESP_045994_1985_ESP_046060_1985/DTEEC_045994_1985_046060_1985_U01.IMG",
+  "orthoUrl": "https://www.uahirise.org/PDS/DTM/ESP/ORB_045900_045999/ESP_045994_1985_ESP_046060_1985/ESP_045994_1985_RED_C_01_ORTHO.JP2",
+  "directoryUrl": "https://www.uahirise.org/PDS/DTM/ESP/ORB_045900_045999/ESP_045994_1985_ESP_046060_1985/",
+  "instrument": "Mars Reconnaissance Orbiter High Resolution Imaging Science Experiment (HiRISE)",
+  "target": "Mars, Jezero Crater",
+  "alignment": "The RED_C orthorectified image is derived from ESP_045994_1985 and is to be read on the DTM grid only after verifying transform, CRS, dimensions, and pixel alignment.",
+  "licenseNote": "Source products are retrieved from the University of Arizona HiRISE PDS archive. Keep original labels and provenance with every derived subset.",
+  "retrievedForPipeline": "2026-11-15"
+}

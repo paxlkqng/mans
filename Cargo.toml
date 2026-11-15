@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/desktop",
+    "crates/mans-nav",
+    "crates/mans-terrain",
+]
+default-members = ["apps/desktop"]
