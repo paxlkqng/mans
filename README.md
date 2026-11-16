@@ -63,6 +63,37 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools python3 tools/nasa-data/fetch_
 
 MOLA samples are roughly 463 m apart at the equator. They support regional terrain interpretation and route-algorithm validation, not astronaut-scale hazard certification. The Inspector shows the original product identifier, coordinate system, vertical datum, sampling and PDS source link.
 
+## Application Screenshots
+
+MANS is a native macOS workstation for exploring NASA HiRISE terrain, comparing traversal policies, and simulating astronaut navigation.
+
+### 3D Terrain & Route Optimization
+
+![HiRISE Terrain and Routes](artifacts/presentation-screenshots/01-hirise-workstation.png)
+
+### Terrain Elevation & Slope Analysis
+
+![Elevation Analysis](artifacts/presentation-screenshots/02-elevation-analysis.png)
+![Slope Analysis](artifacts/presentation-screenshots/03-slope-analysis.png)
+
+### Astronaut Navigation Simulation
+
+![First-Person Navigation](artifacts/presentation-screenshots/05-astronaut-navigation.png)
+
+### Adaptive Route Replanning
+
+A user-defined simulated obstruction changes the planned route. In this example, the remaining route increased from 713.5 m to 753.7 m (+40.2 m).
+
+**Before replanning**
+
+![Simulated Obstruction](artifacts/presentation-screenshots/06-simulated-obstruction.png)
+
+**After replanning**
+
+![Adaptive Replanning](artifacts/presentation-screenshots/07-adaptive-replanning.png)
+
+The terrain is derived from NASA HiRISE observations. Astronaut movement and obstructions are simulated, not real sensor observations.
+
 ## What works
 
 - 65 × 65 terrain grid (12 m cells), interactive 3D view, selectable start and destination.
